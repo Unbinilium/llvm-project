@@ -2091,6 +2091,13 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
       VK, FoundD, TemplateArgs, getNonOdrUseReasonInCurrentContext(D));
   MarkDeclRefReferenced(E);
 
+  /*const IdentifierInfo* I = NameInfo.getName().getAsIdentifierInfo();
+  if (I && I->isPlaceholder()) {
+    Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id);
+  }*/
+
+
+
   // C++ [except.spec]p17:
   //   An exception-specification is considered to be needed when:
   //   - in an expression, the function is the unique lookup result or
@@ -2509,6 +2516,10 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     // placeholder expression node.
     return ExprError();
   }
+
+  /*if(!II || II->isPlaceholder()) {
+     Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id) << SS.getRange();
+  }*/
 
   // C++ [temp.dep.expr]p3:
   //   An id-expression is type-dependent if it contains:
@@ -3270,6 +3281,11 @@ ExprResult Sema::BuildDeclarationNameExpr(
     // We use the dependent type for the RecoveryExpr to prevent bogus follow-up
     // diagnostics, as invalid decls use int as a fallback type.
     return CreateRecoveryExpr(NameInfo.getBeginLoc(), NameInfo.getEndLoc(), {});
+  }
+
+  const IdentifierInfo* I = NameInfo.getName().getAsIdentifierInfo();
+  if (I && I->isPlaceholder()) {
+    Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id);
   }
 
   if (TemplateDecl *Template = dyn_cast<TemplateDecl>(D)) {
