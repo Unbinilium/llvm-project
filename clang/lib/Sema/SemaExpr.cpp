@@ -3284,7 +3284,7 @@ ExprResult Sema::BuildDeclarationNameExpr(
   }
 
   const IdentifierInfo* I = NameInfo.getName().getAsIdentifierInfo();
-  if (I && I->isPlaceholder()) {
+  if (dyn_cast<BindingDecl>(D) && I && I->isPlaceholder()) {
     Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id);
   }
 
