@@ -2091,13 +2091,6 @@ Sema::BuildDeclRefExpr(ValueDecl *D, QualType Ty, ExprValueKind VK,
       VK, FoundD, TemplateArgs, getNonOdrUseReasonInCurrentContext(D));
   MarkDeclRefReferenced(E);
 
-  /*const IdentifierInfo* I = NameInfo.getName().getAsIdentifierInfo();
-  if (I && I->isPlaceholder()) {
-    Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id);
-  }*/
-
-
-
   // C++ [except.spec]p17:
   //   An exception-specification is considered to be needed when:
   //   - in an expression, the function is the unique lookup result or
@@ -2517,10 +2510,6 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     return ExprError();
   }
 
-  /*if(!II || II->isPlaceholder()) {
-     Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id) << SS.getRange();
-  }*/
-
   // C++ [temp.dep.expr]p3:
   //   An id-expression is type-dependent if it contains:
   //     -- an identifier that was declared with a dependent type,
@@ -2739,6 +2728,7 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     return BuildTemplateIdExpr(SS, TemplateKWLoc, R, ADL, TemplateArgs);
   }
 
+  CheckUseOfPlaceholderVariables(R.getLookupNameInfo(), R.getAsSingle<NamedDecl>());
   return BuildDeclarationNameExpr(SS, R, ADL);
 }
 
@@ -3266,6 +3256,27 @@ ExprResult Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
 static void diagnoseUncapturableValueReference(Sema &S, SourceLocation loc,
                                                ValueDecl *var);
 
+
+void Sema::CheckUseOfPlaceholderVariables(const DeclarationNameInfo &NameInfo, NamedDecl *D) {
+  if(!D)
+    return;
+  const IdentifierInfo* I = D->getDeclName().getAsIdentifierInfo();
+  if (isa<VarDecl>(D) && I && I->isPlaceholder()) {
+    LookupResult R(*this, D->getDeclName(), D->getLocation(),
+                 Sema::LookupOrdinaryName, Sema::ForVisibleRedeclaration);
+    R.setIgnoreAnonymousVariables(false);
+    LookupName(R, getCurScope());;
+    for(NamedDecl* Decl: R) {
+      if(!isa<BindingDecl>(Decl) && isDeclInScope(Decl, CurContext, getCurScope())
+      && Decl->isAnonymous()) {
+        Diag(NameInfo.getLoc(), diag::warn_using_underscore_confusing);
+        Diag(D->getLocation(), diag::note_reference_underscore) << D;
+        break;
+      }
+    }
+  }
+}
+
 /// Complete semantic analysis for a reference to the given declaration.
 ExprResult Sema::BuildDeclarationNameExpr(
     const CXXScopeSpec &SS, const DeclarationNameInfo &NameInfo, NamedDecl *D,
@@ -3281,11 +3292,6 @@ ExprResult Sema::BuildDeclarationNameExpr(
     // We use the dependent type for the RecoveryExpr to prevent bogus follow-up
     // diagnostics, as invalid decls use int as a fallback type.
     return CreateRecoveryExpr(NameInfo.getBeginLoc(), NameInfo.getEndLoc(), {});
-  }
-
-  const IdentifierInfo* I = NameInfo.getName().getAsIdentifierInfo();
-  if (dyn_cast<BindingDecl>(D) && I && I->isPlaceholder()) {
-    Diag(NameInfo.getLoc(), diag::warn_deprecated_underscore_id);
   }
 
   if (TemplateDecl *Template = dyn_cast<TemplateDecl>(D)) {

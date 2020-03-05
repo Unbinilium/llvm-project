@@ -232,9 +232,6 @@ IdentifierResolver::iterator
 IdentifierResolver::begin(DeclarationName Name) {
   if (IdentifierInfo *II = Name.getAsIdentifierInfo())
     readingIdentifier(*II);
-  else {
-    return end();
-  }
 
   void *Ptr = Name.getFETokenInfo();
   if (!Ptr) return end();

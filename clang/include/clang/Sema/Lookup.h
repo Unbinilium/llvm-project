@@ -172,6 +172,7 @@ public:
       : SemaPtr(Other.SemaPtr), NameInfo(Other.NameInfo),
         LookupKind(Other.LookupKind), IDNS(Other.IDNS), Redecl(Other.Redecl),
         ExternalRedecl(Other.ExternalRedecl), HideTags(Other.HideTags),
+        IgnoreAnonymousVariables(Other.IgnoreAnonymousVariables),
         AllowHidden(Other.AllowHidden),
         TemplateNameLookup(Other.TemplateNameLookup) {}
 
@@ -192,6 +193,7 @@ public:
         Redecl(std::move(Other.Redecl)),
         ExternalRedecl(std::move(Other.ExternalRedecl)),
         HideTags(std::move(Other.HideTags)),
+        IgnoreAnonymousVariables(std::move(Other.IgnoreAnonymousVariables)),
         Diagnose(std::move(Other.Diagnose)),
         AllowHidden(std::move(Other.AllowHidden)),
         Shadowed(std::move(Other.Shadowed)),
@@ -215,6 +217,7 @@ public:
     Redecl = std::move(Other.Redecl);
     ExternalRedecl = std::move(Other.ExternalRedecl);
     HideTags = std::move(Other.HideTags);
+    IgnoreAnonymousVariables = std::move(Other.IgnoreAnonymousVariables);
     Diagnose = std::move(Other.Diagnose);
     AllowHidden = std::move(Other.AllowHidden);
     Shadowed = std::move(Other.Shadowed);
@@ -287,6 +290,14 @@ public:
   /// declarations during resolution.  The default is true.
   void setHideTags(bool Hide) {
     HideTags = Hide;
+  }
+
+  void setIgnoreAnonymousVariables(bool Ignore) {
+    IgnoreAnonymousVariables = Ignore;
+  }
+
+  bool isDeclarationIgnored(NamedDecl *ND) const{
+    return IgnoreAnonymousVariables && ND->isAnonymous();
   }
 
   /// Sets whether this is a template-name lookup. For template-name lookups,
@@ -388,6 +399,8 @@ public:
 
     if (isAvailableForLookup(getSema(), D) || isHiddenDeclarationVisible(D))
       return D;
+    if(isDeclarationIgnored(D))
+      return nullptr;
 
     return getAcceptableDeclSlow(D);
   }
@@ -766,6 +779,8 @@ private:
   /// True if tag declarations should be hidden if non-tags
   ///   are present
   bool HideTags = true;
+
+  bool IgnoreAnonymousVariables = true;
 
   bool Diagnose = false;
 
