@@ -6582,7 +6582,7 @@ Sema::ActOnTypedefDeclarator(Scope* S, Declarator& D, DeclContext* DC,
     Previous.clear();
   }
 
-  IdentifierInfo* Name = D.getName().Identifier;
+  IdentifierInfo* Name = D.getIdentifier();
   if(Name && Name->isPlaceholder()) {
     Diag(D.getBeginLoc(), diag::warn_deprecated_underscore_id_decl);
   }

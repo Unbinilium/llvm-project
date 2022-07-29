@@ -11168,7 +11168,7 @@ Decl *Sema::ActOnStartNamespaceDef(
       AddToKnown = !IsInline;
     }
 
-    if(II->isPlaceholder()) {
+    if(II && II->isPlaceholder()) {
       Diag(IdentLoc, diag::warn_deprecated_underscore_id_decl);
     }
   } else {
