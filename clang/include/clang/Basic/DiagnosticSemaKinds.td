@@ -233,6 +233,10 @@ def ext_imaginary_constant : Extension<
 def ext_integer_complex : Extension<
   "complex integer types are a GNU extension">, InGroup<GNUComplexInteger>;
 
+def warn_deprecated_underscore_id_decl : Warning<
+  "declaring aliases, namespaces and types called '_' is deprecated">;
+
+
 def err_invalid_saturation_spec : Error<"'_Sat' specifier is only valid on "
   "'_Fract' or '_Accum', not '%0'">;
 def err_invalid_sign_spec : Error<"'%0' cannot be signed or unsigned">;
@@ -6496,6 +6500,16 @@ def warn_atomic_member_access : Warning<
   InGroup<DiagGroup<"atomic-access">>, DefaultError;
 
 // Expressions.
+def warn_using_underscore_confusing : Warning<
+  "Refering to a variable named '_' while anonymous variables are in scope">;
+def note_reference_underscore : Note<
+  "'_' refers to the variable declared here">;
+def warn_anonymous_variable_has_no_side_effect : Warning<
+  "Anonymous variable has no side effect">;
+
+def select_unary_expr_or_type_trait_kind : TextSubstitution<
+  "%select{sizeof|alignof|vec_step|__builtin_omp_required_simd_align|"
+  "__alignof}0">;
 def ext_sizeof_alignof_function_type : Extension<
   "invalid application of '%0' to a function type">, InGroup<PointerArith>;
 def ext_sizeof_alignof_void_type : Extension<
