@@ -18,7 +18,6 @@
 #include <errno.h>
 #include <iosfwd>
 #include <limits>
-#include <__type_traits/is_base_of.h>
 
 #ifdef __MVS__
 # include <__support/ibm/nanosleep.h>
@@ -699,50 +698,6 @@ private:
     friend class _LIBCPP_TYPE_VIS thread;
     friend struct _LIBCPP_TEMPLATE_VIS hash<__thread_id>;
 };
-
-#  if __cplusplus > 202100L
-
-template <typename...>
-constexpr bool __has_duplicated_thread_attribute = false;
-template <typename K, typename First, typename... T>
-constexpr bool __has_duplicated_thread_attribute<K, First, T...>
-     = is_same_v<First, K> || __has_duplicated_thread_attribute<K, T...>;
-
-template <typename K>
-K* __extract_thread_attribute()  { return nullptr; }
-template <typename K, typename First, typename... T>
-constexpr const K* __extract_thread_attribute(const First & first, const T&... trailing)  {
-    if constexpr(is_same_v<First, K>) {
-        static_assert(!__has_duplicated_thread_attribute<K, T...>, "Found duplicated thread attribute");
-        return &first;
-    }
-    return __extract_thread_attribute<K>(trailing...);
-}
-
-struct _LIBCPP_TYPE_VIS thread_attribute {};
-struct _LIBCPP_TYPE_VIS thread_name : thread_attribute {
-    static constexpr std::size_t max_len = 60;
-    constexpr thread_name(const char* name) noexcept
-    : __name(name){}
-private:
-    friend class _LIBCPP_TYPE_VIS thread;
-    friend class _LIBCPP_TYPE_VIS jthread;
-    const char* __name;
-};
-
-struct _LIBCPP_TYPE_VIS thread_stack_size : thread_attribute {
-    constexpr thread_stack_size(std::size_t size) noexcept
-    : __size(size) {
-
-    }
-    std::size_t __size;
-};
-
-template <typename T>
-concept __thread_attribute = is_base_of_v<thread_attribute, T>;
-
-#endif
-
 
 namespace this_thread
 {
