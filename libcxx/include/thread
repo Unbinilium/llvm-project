@@ -251,15 +251,18 @@ struct _LIBCPP_TYPE_VIS thread_name : thread_attribute {
     static constexpr std::size_t __max_len = 15;
 #endif
     constexpr thread_name(std::string_view str) noexcept {
-      __name[str.copy(__name, max_)] = 0;
+      __name[str.copy(__name, __max_len)] = 0;
     }
     constexpr thread_name(std::u8string_view str) noexcept {
-      __name[str.copy(__name, max_)] = 0; // todo conversion
+      std::size_t __i = 0;
+      for(; __i < std::min(__max_len, str.size());  __i++)
+        __name[__i] = (char)str[__i];
+      __name[__i] = 0;
     }
 private:
     friend class _LIBCPP_TYPE_VIS thread;
     friend class _LIBCPP_TYPE_VIS jthread;
-    __libcpp_threadname_char_t __name[max_len + 1];
+    __libcpp_threadname_char_t __name[__max_len + 1];
 };
 
 struct _LIBCPP_TYPE_VIS thread_stack_size : thread_attribute {
