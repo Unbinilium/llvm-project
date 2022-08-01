@@ -97,6 +97,8 @@ void sleep_for(const chrono::duration<Rep, Period>& rel_time);
 #include <tuple>
 #include <type_traits>
 #include <version>
+#include <__type_traits/is_base_of.h>
+#include <string_view>
 
 #ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
 #  include <chrono>
@@ -220,6 +222,59 @@ _LIBCPP_INLINE_VISIBILITY
 basic_ostream<_CharT, _Traits>&
 operator<<(basic_ostream<_CharT, _Traits>& __os, __thread_id __id)
 {return __os << __id.__id_;}
+
+#  if __cplusplus > 202100L
+
+template <typename...>
+constexpr bool __has_duplicated_thread_attribute = false;
+template <typename K, typename First, typename... T>
+constexpr bool __has_duplicated_thread_attribute<K, First, T...>
+     = is_same_v<First, K> || __has_duplicated_thread_attribute<K, T...>;
+
+template <typename K>
+K* __extract_thread_attribute()  { return nullptr; }
+template <typename K, typename First, typename... T>
+constexpr const K* __extract_thread_attribute(const First & first, const T&... trailing)  {
+    if constexpr(is_same_v<First, K>) {
+        static_assert(!__has_duplicated_thread_attribute<K, T...>, "Found duplicated thread attribute");
+        return &first;
+    }
+    return __extract_thread_attribute<K>(trailing...);
+}
+
+struct _LIBCPP_TYPE_VIS thread_attribute {};
+struct _LIBCPP_TYPE_VIS thread_name : thread_attribute {
+
+#ifdef _LIBCPP_HAS_THREAD_API_WIN32
+    static constexpr std::size_t __max_len = 64;
+#else
+    static constexpr std::size_t __max_len = 15;
+#endif
+    constexpr thread_name(std::string_view str) noexcept {
+      __name[str.copy(__name, max_)] = 0;
+    }
+    constexpr thread_name(std::u8string_view str) noexcept {
+      __name[str.copy(__name, max_)] = 0; // todo conversion
+    }
+private:
+    friend class _LIBCPP_TYPE_VIS thread;
+    friend class _LIBCPP_TYPE_VIS jthread;
+    __libcpp_threadname_char_t __name[max_len + 1];
+};
+
+struct _LIBCPP_TYPE_VIS thread_stack_size : thread_attribute {
+    constexpr thread_stack_size(std::size_t size) noexcept
+    : __size(size) {
+
+    }
+    std::size_t __size;
+};
+
+template <typename T>
+concept __thread_attribute = is_base_of_v<thread_attribute, T>;
+
+#endif
+
 
 class _LIBCPP_TYPE_VIS thread
 {
