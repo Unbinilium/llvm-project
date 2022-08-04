@@ -98,12 +98,15 @@ thread::hardware_concurrency() noexcept
 #endif // defined(CTL_HW) && defined(HW_NCPU)
 }
 
-#if __cplusplus > 201911L
+#ifdef __cpp_lib_jthread
 
 jthread::~jthread()
 {
     if (__thr_.joinable())
+    {
+        request_stop();
         __thr_.join();
+    }
 }
 
 void

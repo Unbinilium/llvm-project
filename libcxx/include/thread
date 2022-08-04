@@ -108,6 +108,10 @@ void sleep_for(const chrono::duration<Rep, Period>& rel_time);
 // standard-mandated includes
 #include <compare>
 
+#if __cplusplus > 201703L
+#  include <stop_token>
+#endif
+
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
 #endif
@@ -387,10 +391,10 @@ thread::thread(_Fp && __f, Attrs&&... __attrs)
     const char* __thread_name = nullptr;
     std::size_t __thread_stack_size = 0;
 
-    if(auto opt = __extract_thread_attribute<thread_name>(__attrs...); opt) {
+    if (auto opt = __extract_thread_attribute<thread_name>(__attrs...); opt) {
         __thread_name = opt->__name;
     }
-    if(auto opt = __extract_thread_attribute<thread_stack_size>(__attrs...); opt) {
+    if (auto opt = __extract_thread_attribute<thread_stack_size>(__attrs...); opt) {
         __thread_stack_size = opt->__size;
     }
 
@@ -446,69 +450,103 @@ thread::thread(_Fp __f)
 
 #endif // _LIBCPP_CXX03_LANG
 
-#if __cplusplus > 201911L
+
+#ifdef __cpp_lib_jthread
 
 class _LIBCPP_TYPE_VIS jthread
 {
+    stop_source __stop_source_;
     thread __thr_;
 
     jthread(const jthread&);
     jthread& operator=(const jthread&);
+
+    template<class _Fp, class... _Args>
+    thread
+    __create(stop_source& __ssrc, _Fp&& __f, _Args&&... __args)
+    {
+        // TODO: extract thread attributes from __args
+        //   [ ] _Fp
+        //   [x] _Fp, _thr_Attrs | works
+        //   [ ] _Fp, _Fp_Args
+        //   [x] _Fp, stop_token | not works, std::thread may need change
+        //   [x] _Fp, stop_token, _Fp_Args | not works, std::thread may need change
+        //   [ ] _Fp, stop_token, _Fp_Args, _thr_Attrs
+	    if constexpr(is_invocable_v<decay_t<_Fp>, stop_token>)
+	        return thread(_VSTD::forward<_Fp>(__f), __ssrc.get_token(),
+			              _VSTD::forward<_Args>(__args)...);
+        else
+            return thread(_VSTD::forward<_Fp>(__f),
+                          _VSTD::forward<_Args>(__args)...);
+    }
+
 public:
+    typedef __thread_id id;
+    typedef __libcpp_thread_t native_handle_type;
+
     _LIBCPP_INLINE_VISIBILITY
-    jthread() _NOEXCEPT : __thr_(thread{}) {}
-#ifndef _LIBCPP_CXX03_LANG
+    jthread() _NOEXCEPT : __stop_source_(nostopstate), __thr_(thread{}) {}
+#  ifndef _LIBCPP_CXX03_LANG
     template <class _Fp, class ..._Args,
               class = __enable_if_t<!is_same<__uncvref_t<_Fp>, jthread>::value> >
         _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
-    explicit jthread(_Fp&& __f, _Args&&... __args) : __thr_(
-        thread(_VSTD::forward<_Fp>(__f),
-               _VSTD::forward<_Args>(__args)...)
+    explicit jthread(_Fp&& __f, _Args&&... __args) : __stop_source_(nostopstate), __thr_(
+        __create(__stop_source_, _VSTD::forward<_Fp>(__f),
+            _VSTD::forward<_Args>(__args)...)
         ) {}
 
-#  if __cplusplus > 202100L
+#    if __cplusplus > 202100L
     template <class  _Fp, __thread_attribute... Attrs>
     _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
-    explicit jthread(_Fp && __f, Attrs&&... attrs) : __thr_(
-        thread(_VSTD::forward<_Fp>(__f),
-               _VSTD::forward<Attrs>(attrs)...)
+    explicit jthread(_Fp && __f, Attrs&&... attrs) : __stop_source_(nostopstate), __thr_(
+        __create(__stop_source_, _VSTD::forward<_Fp>(__f),
+            _VSTD::forward<Attrs>(attrs)...)
         ) {};
-#   endif
+#    endif
 
-#else  // _LIBCPP_CXX03_LANG
+#  else  // _LIBCPP_CXX03_LANG
     template <class _Fp>
     _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
-    explicit jthread(_Fp __f) : __thr_(thread(_VSTD::forward<_Fp>(__f))) {};
-#endif
+    explicit jthread(_Fp __f) : __stop_source_(nostopstate), __thr_(__create(__stop_source_, _VSTD::forward<_Fp>(__f))) {};
+#  endif
     ~jthread();
 
     _LIBCPP_INLINE_VISIBILITY
-    jthread(jthread&& __t) _NOEXCEPT : __thr_(_VSTD::move(__t.__thr_)) {
+    jthread(jthread&& __t) _NOEXCEPT : __stop_source_(_VSTD::move(__t.__stop_source_)), __thr_(_VSTD::move(__t.__thr_)) {
         __t.__thr_ = thread{};
     }
 
     _LIBCPP_INLINE_VISIBILITY
     jthread& operator=(jthread&& __t) _NOEXCEPT {
-        if (__t.joinable())
-            __t.join();
-        __thr_ = _VSTD::move(__t.__thr_);
-        __t.__thr_ = thread{};
+        jthread(_VSTD::move(__t)).swap(*this);
         return *this;
     }
 
     _LIBCPP_INLINE_VISIBILITY
-    void swap(jthread& __t) _NOEXCEPT {__thr_.swap(__t.__thr_);}
+    void swap(jthread& __t) _NOEXCEPT {
+        _VSTD::swap(__stop_source_, __t.__stop_source_);
+        _VSTD::swap(__thr_, __t.__thr_);
+    }
 
     _LIBCPP_INLINE_VISIBILITY
     bool joinable() const _NOEXCEPT {return __thr_.joinable();}
     void join();
     void detach();
     _LIBCPP_INLINE_VISIBILITY
-    auto get_id() const _NOEXCEPT {return __thr_.get_id();}
+    id get_id() const _NOEXCEPT {return __thr_.get_id();}
     _LIBCPP_INLINE_VISIBILITY
-    auto native_handle() _NOEXCEPT {return __thr_.native_handle();}
+    native_handle_type native_handle() _NOEXCEPT {return __thr_.native_handle();}
 
     static unsigned hardware_concurrency() _NOEXCEPT;
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_source get_stop_source() _NOEXCEPT {return __stop_source_;}
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_token get_stop_token() const _NOEXCEPT {return __stop_source_.get_token();}
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool request_stop() _NOEXCEPT {return __stop_source_.request_stop();}
 };
 
 #endif
