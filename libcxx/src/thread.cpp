@@ -98,6 +98,34 @@ thread::hardware_concurrency() noexcept
 #endif // defined(CTL_HW) && defined(HW_NCPU)
 }
 
+#if __cplusplus > 201911L
+
+jthread::~jthread()
+{
+    if (__thr_.joinable())
+        __thr_.join();
+}
+
+void
+jthread::join()
+{
+    __thr_.join();
+}
+
+void
+jthread::detach()
+{
+    __thr_.detach();
+}
+
+unsigned
+jthread::hardware_concurrency() noexcept
+{
+    return __thr_.hardware_concurrency();
+}
+
+#endif
+
 namespace this_thread
 {
 

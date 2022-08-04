@@ -446,6 +446,74 @@ thread::thread(_Fp __f)
 
 #endif // _LIBCPP_CXX03_LANG
 
+#if __cplusplus > 201911L
+
+class _LIBCPP_TYPE_VIS jthread
+{
+    thread __thr_;
+
+    jthread(const jthread&);
+    jthread& operator=(const jthread&);
+public:
+    _LIBCPP_INLINE_VISIBILITY
+    jthread() _NOEXCEPT : __thr_(thread{}) {}
+#ifndef _LIBCPP_CXX03_LANG
+    template <class _Fp, class ..._Args,
+              class = __enable_if_t<!is_same<__uncvref_t<_Fp>, jthread>::value> >
+        _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp&& __f, _Args&&... __args) : __thr_(
+        thread(_VSTD::forward<_Fp>(__f),
+               _VSTD::forward<_Args>(__args)...)
+        ) {};
+
+#  if __cplusplus > 202100L
+    template <class  _Fp, __thread_attribute... Attrs>
+    _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp && __f, Attrs&&... attrs) : __thr_(
+        thread(_VSTD::forward<_Fp>(__f),
+               _VSTD::forward<_Args>(__args)...)
+        ) {};
+#   endif
+
+#else  // _LIBCPP_CXX03_LANG
+    template <class _Fp>
+    _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp __f) : __thr_(thread(_VSTD::forward<_Fp>(__f))) {};
+#endif
+    ~jthread();
+
+    _LIBCPP_INLINE_VISIBILITY
+    jthread(jthread&& __t) _NOEXCEPT : __thr_(__t.__thr_) {
+        __t.__thr_ = thread{};
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    jthread& operator=(jthread&& __t) _NOEXCEPT {
+        if (__t.joinable())
+            __t.join();
+        __thr_ = __t.__thr_;
+        __t.__thr_ = thread{};
+        return *this;
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    void swap(jthread& __t) _NOEXCEPT {__thr_.swap(__t.__thr_);}
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool joinable() const _NOEXCEPT {return __thr_.joinable();}
+    void join();
+    void detach();
+    _LIBCPP_INLINE_VISIBILITY
+    auto get_id() const _NOEXCEPT {return __thr_.get_id();}
+    _LIBCPP_INLINE_VISIBILITY
+    auto native_handle() _NOEXCEPT {return __thr_.native_handle();}
+
+    static unsigned hardware_concurrency() _NOEXCEPT;
+};
+
+#endif
+
+
 inline _LIBCPP_INLINE_VISIBILITY
 void swap(thread& __x, thread& __y) _NOEXCEPT {__x.swap(__y);}
 
