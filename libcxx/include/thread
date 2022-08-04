@@ -464,14 +464,14 @@ public:
     explicit jthread(_Fp&& __f, _Args&&... __args) : __thr_(
         thread(_VSTD::forward<_Fp>(__f),
                _VSTD::forward<_Args>(__args)...)
-        ) {};
+        ) {}
 
 #  if __cplusplus > 202100L
     template <class  _Fp, __thread_attribute... Attrs>
     _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
     explicit jthread(_Fp && __f, Attrs&&... attrs) : __thr_(
         thread(_VSTD::forward<_Fp>(__f),
-               _VSTD::forward<_Args>(__args)...)
+               _VSTD::forward<Attrs>(attrs)...)
         ) {};
 #   endif
 
@@ -483,7 +483,7 @@ public:
     ~jthread();
 
     _LIBCPP_INLINE_VISIBILITY
-    jthread(jthread&& __t) _NOEXCEPT : __thr_(__t.__thr_) {
+    jthread(jthread&& __t) _NOEXCEPT : __thr_(_VSTD::move(__t.__thr_)) {
         __t.__thr_ = thread{};
     }
 
@@ -491,7 +491,7 @@ public:
     jthread& operator=(jthread&& __t) _NOEXCEPT {
         if (__t.joinable())
             __t.join();
-        __thr_ = __t.__thr_;
+        __thr_ = _VSTD::move(__t.__thr_);
         __t.__thr_ = thread{};
         return *this;
     }

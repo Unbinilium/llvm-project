@@ -121,7 +121,7 @@ jthread::detach()
 unsigned
 jthread::hardware_concurrency() noexcept
 {
-    return __thr_.hardware_concurrency();
+    return thread::hardware_concurrency();
 }
 
 #endif
