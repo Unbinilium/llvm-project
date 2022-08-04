@@ -276,6 +276,13 @@ public:
     return getIdentifier() ? getIdentifier()->getName() : "";
   }
 
+  bool isAnonymous() const {
+    return Decl::isAnonymous();
+  }
+  void setIsAnonymous(bool Anonymous) {
+    Decl::setIsAnonymous(Anonymous);
+  }
+
   /// Get a human-readable name for the declaration, even if it is one of the
   /// special kinds of names (C++ constructor, Objective-C selector, etc).
   ///
@@ -983,6 +990,10 @@ protected:
     /// The number of parameters preceding this parameter in the
     /// function parameter scope in which it was declared.
     unsigned ParameterIndex : NumParameterIndexBits;
+
+    // Whether this parameter was originally expanded from a pack
+    // OxF: not a pack
+    unsigned OriginalPackIndex: 4;
   };
 
   class NonParmVarDeclBitfields {
@@ -1692,6 +1703,8 @@ protected:
               SourceLocation IdLoc, IdentifierInfo *Id, QualType T,
               TypeSourceInfo *TInfo, StorageClass S, Expr *DefArg)
       : VarDecl(DK, C, DC, StartLoc, IdLoc, Id, T, TInfo, S) {
+    ParmVarDeclBits.OriginalPackIndex = 0xF;
+
     assert(ParmVarDeclBits.HasInheritedDefaultArg == false);
     assert(ParmVarDeclBits.DefaultArgKind == DAK_None);
     assert(ParmVarDeclBits.IsKNRPromoted == false);
@@ -1806,6 +1819,13 @@ public:
   bool hasUninstantiatedDefaultArg() const {
     return ParmVarDeclBits.DefaultArgKind == DAK_Uninstantiated;
   }
+
+  void setOriginalPackIndex(unsigned PackIndex) {
+    ParmVarDeclBits.OriginalPackIndex = PackIndex;
+  }
+
+  bool wasExpandedFromPack() const { return ParmVarDeclBits.OriginalPackIndex != 0xF; }
+  unsigned originalPackIndex() const { return ParmVarDeclBits.OriginalPackIndex; }
 
   /// Specify that this parameter has an unparsed default argument.
   /// The argument will be replaced with a real default argument via

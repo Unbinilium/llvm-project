@@ -98,6 +98,37 @@ thread::hardware_concurrency() noexcept
 #endif // defined(CTL_HW) && defined(HW_NCPU)
 }
 
+#ifdef __cpp_lib_jthread
+
+jthread::~jthread()
+{
+    if (__thr_.joinable())
+    {
+        request_stop();
+        __thr_.join();
+    }
+}
+
+void
+jthread::join()
+{
+    __thr_.join();
+}
+
+void
+jthread::detach()
+{
+    __thr_.detach();
+}
+
+unsigned
+jthread::hardware_concurrency() noexcept
+{
+    return thread::hardware_concurrency();
+}
+
+#endif
+
 namespace this_thread
 {
 

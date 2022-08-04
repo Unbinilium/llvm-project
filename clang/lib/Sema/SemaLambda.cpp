@@ -1177,7 +1177,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     // C++11 [expr.prim.lambda]p8:
     //   An identifier or this shall not appear more than once in a
     //   lambda-capture.
-    if (!CaptureNames.insert(C->Id).second) {
+    if (C->Id && !C->Id->isPlaceholder() && !CaptureNames.insert(C->Id).second) {
       if (Var && LSI->isCaptured(Var)) {
         Diag(C->Loc, diag::err_capture_more_than_once)
             << C->Id << SourceRange(LSI->getCapture(Var).getLocation())

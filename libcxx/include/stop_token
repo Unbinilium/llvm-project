@@ -1,0 +1,592 @@
+// -*- C++ -*-
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+// Modified from: git://gcc/libstdc++-v3/include/std/stop_token
+
+// Copyright (C) 2019-2022 Free Software Foundation, Inc.
+//
+// This file is part of the GNU ISO C++ Library.  This library is free
+// software; you can redistribute it and/or modify it under the
+// terms of the GNU General Public License as published by the
+// Free Software Foundation; either version 3, or (at your option)
+// any later version.
+
+// This library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
+// Under Section 7 of GPL version 3, you are granted additional
+// permissions described in the GCC Runtime Library Exception, version
+// 3.1, as published by the Free Software Foundation.
+
+// You should have received a copy of the GNU General Public License and
+// a copy of the GCC Runtime Library Exception along with this program;
+// see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+// <http://www.gnu.org/licenses/>.
+
+//===----------------------------------------------------------------------===//
+
+#ifndef _LIBCPP_STOP_TOKEN
+#define _LIBCPP_STOP_TOKEN
+
+#if __cplusplus > 201703L
+
+#include <__threading_support>
+#include <atomic>
+#include <semaphore>
+
+#define __cpp_lib_jthread 201911L
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+/// Tag type indicating a stop_source should have no shared-stop-state.
+struct nostopstate_t {explicit nostopstate_t() = default;};
+_LIBCPP_INLINE_VISIBILITY
+inline constexpr nostopstate_t nostopstate{};
+
+class stop_source;
+
+/// Allow testing whether a stop request has been made on a `stop_source`.
+class _LIBCPP_TYPE_VIS stop_token
+{
+public:
+    stop_token() _NOEXCEPT = default;
+
+    stop_token(const stop_token&) _NOEXCEPT = default;
+    stop_token(stop_token&&) _NOEXCEPT = default;
+
+    ~stop_token() = default;
+
+    stop_token&
+    operator=(const stop_token&) _NOEXCEPT = default;
+
+    stop_token&
+    operator=(stop_token&&) _NOEXCEPT = default;
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool stop_possible() const _NOEXCEPT {return static_cast<bool>(__state_) && __state_->__stop_possible();}
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool stop_requested() const _NOEXCEPT {return static_cast<bool>(__state_) && __state_->__stop_requested();}
+
+    _LIBCPP_INLINE_VISIBILITY
+    void swap(stop_token& __rhs) _NOEXCEPT {__state_.swap(__rhs.__state_);}
+
+    _LIBCPP_INLINE_VISIBILITY
+    friend bool operator==(const stop_token& __a, const stop_token& __b) {return __a.__state_ == __b.__state_;}
+
+    _LIBCPP_INLINE_VISIBILITY
+    friend void swap(stop_token& __lhs, stop_token& __rhs) _NOEXCEPT {__lhs.swap(__rhs);}
+
+private:
+    friend class stop_source;
+
+    template<typename _Fp>
+    friend class stop_callback;
+
+    static void
+    __yield() _NOEXCEPT {__libcpp_thread_yield();}
+
+#ifndef __cpp_lib_semaphore
+    struct binary_semaphore
+    {
+        explicit binary_semaphore(int __d) : __counter_(__d > 0) {}
+
+        void release() {__counter_.fetch_add(1, memory_order::release);}
+
+        void acquire()
+        {
+            int __old = 1;
+            while (!__counter_.compare_exchange_weak(__old, 0,
+                memory_order::acquire, memory_order::relaxed))
+                {
+                    __old = 1;
+                    __yield();
+                }
+        }
+
+        atomic<int> __counter_;
+    };
+#endif
+
+    struct __libcpp_stop_cb
+    {
+        using __cb_type = void(__libcpp_stop_cb*) _NOEXCEPT;
+        __cb_type* __callback_;
+        __libcpp_stop_cb* __cb_prev_ = nullptr;
+        __libcpp_stop_cb* __cb_next_ = nullptr;
+        bool* __destroyed_ = nullptr;
+        binary_semaphore __done_{0};
+
+        explicit __libcpp_stop_cb(__cb_type* __cb)
+            : __callback_(__cb) {}
+
+        void __cb_run() _NOEXCEPT {__callback_(this);}
+    };
+
+    struct __libcpp_stop_state_t
+    {
+        using value_type = uint32_t;
+        static constexpr value_type __stop_requested_bit_ = 1;
+        static constexpr value_type __locked_bit_ = 2;
+        static constexpr value_type __ssrc_counter_inc_ = 4;
+
+        std::atomic<value_type> __owners_{1};
+        std::atomic<value_type> __value_{__ssrc_counter_inc_};
+        __libcpp_stop_cb* __head_ = nullptr;
+        __thread_id __requester_;
+
+        __libcpp_stop_state_t() = default;
+
+        bool __stop_possible() _NOEXCEPT
+        {
+            // true if a stop request has already been made or there are still
+            // stop_source objects that would allow one to be made.
+            return __value_.load(memory_order::acquire) & ~__locked_bit_;
+        }
+
+        bool __stop_requested() _NOEXCEPT
+        {
+            return __value_.load(memory_order::acquire) & __stop_requested_bit_;
+        }
+
+        void __add_owner() _NOEXCEPT
+        {
+            __owners_.fetch_add(1, memory_order::relaxed);
+        }
+
+        void __release_ownership() _NOEXCEPT
+        {
+            if (__owners_.fetch_sub(1, memory_order::acq_rel) == 1)
+                delete this;
+        }
+
+        void __add_ssrc() _NOEXCEPT
+        {
+            __value_.fetch_add(__ssrc_counter_inc_, memory_order::relaxed);
+        }
+
+        void __sub_ssrc() _NOEXCEPT
+        {
+            __value_.fetch_sub(__ssrc_counter_inc_, memory_order::release);
+        }
+
+        // Obtain lock.
+        void __lock() _NOEXCEPT
+        {
+            // Can use relaxed loads to get the current value.
+            // The successful call to __try_lock is an acquire operation.
+            auto __old = __value_.load(memory_order::relaxed);
+            while (!__try_lock(__old, memory_order::relaxed)) {}
+        }
+
+        // Precondition: calling thread holds the lock.
+        void __unlock() _NOEXCEPT
+        {
+            __value_.fetch_sub(__locked_bit_, memory_order::release);
+        }
+
+        bool __request_stop() _NOEXCEPT
+        {
+            // obtain lock and set stop_requested bit
+            auto __old = __value_.load(memory_order::acquire);
+            do
+            {
+                if (__old & __stop_requested_bit_) // stop request already made
+                    return false;
+            }
+            while (!__try_lock_and_stop(__old));
+
+            __requester_ = this_thread::get_id();
+
+            while (__head_)
+            {
+                bool __last_cb;
+                __libcpp_stop_cb* __cb = __head_;
+                __head_ = __head_->__cb_next_;
+                if (__head_)
+                {
+                    __head_->__cb_prev_ = nullptr;
+                    __last_cb = false;
+                }
+                else
+                    __last_cb = true;
+
+                // Allow other callbacks to be unregistered while __cb runs.
+                __unlock();
+
+                bool __destroyed = false;
+                __cb->__destroyed_ = &__destroyed;
+
+                // run callback
+                __cb->__cb_run();
+
+                if (!__destroyed)
+                {
+                    __cb->__destroyed_ = nullptr;
+
+                    // synchronize with destructor of stop_callback that owns *__cb
+                    // TODO: release if not __is_single_threaded()
+                    __cb->__done_.release();
+                }
+
+                // Avoid relocking if we already know there are no more callbacks.
+                if (__last_cb)
+                    return true;
+
+                __lock();
+            }
+
+            __unlock();
+            return true;
+        }
+
+
+        bool __register_callback(__libcpp_stop_cb* __cb) _NOEXCEPT
+        {
+            auto __old = __value_.load(memory_order::acquire);
+            do
+            {
+                if (__old & __stop_requested_bit_) // stop request already made
+                {
+                    __cb->__cb_run(); // run synchronously
+                    return false;
+                }
+
+            if (__old < __ssrc_counter_inc_) // no stop_source owns *this
+                // No need to register callback if no stop request can be made.
+                // Returning false also means the stop_callback does not share
+                // ownership of this state, but that's not observable.
+                return false;
+            }
+            while (!__try_lock(__old));
+
+            __cb->__cb_next_ = __head_;
+            if (__head_)
+                __head_->__cb_prev_ = __cb;
+            __head_ = __cb;
+            __unlock();
+            return true;
+        }
+
+        // Called by ~stop_callback just before destroying *__cb.
+
+        void __remove_callback(__libcpp_stop_cb* __cb)
+        {
+            __lock();
+
+            if (__cb == __head_)
+            {
+                __head_ = __head_->__cb_next_;
+                if (__head_)
+                __head_->__cb_prev_ = nullptr;
+                __unlock();
+                return;
+            }
+            else if (__cb->__cb_prev_)
+            {
+                __cb->__cb_prev_->__cb_next_ = __cb->__cb_next_;
+                if (__cb->__cb_next_)
+                    __cb->__cb_next_->__cb_prev_ = __cb->__cb_prev_;
+                __unlock();
+                return;
+            }
+
+            __unlock();
+
+            // Callback is not in the list, so must have been removed by a call to
+            // __request_stop.
+
+            // Despite appearances there is no data race on __requester_. The only
+            // write to it happens before the callback is removed from the list,
+            // and removing it from the list happens before this read.
+            if (!(__requester_ == this_thread::get_id()))
+            {
+                // Synchronize with completion of callback.
+                __cb->__done_.acquire();
+                // Safe for ~stop_callback to destroy *__cb now.
+                return;
+            }
+
+            if (__cb->__destroyed_)
+                *__cb->__destroyed_ = true;
+        }
+
+        // Try to obtain the lock.
+        // Returns true if the lock is acquired (with memory order acquire).
+        // Otherwise, sets __curval = __value_.load(__failure) and returns false.
+        // Might fail spuriously, so must be called in a loop.
+        bool __try_lock(value_type& __curval,
+            memory_order __failure = memory_order::acquire) _NOEXCEPT
+        {
+            return __do_try_lock(__curval, 0, memory_order::acquire, __failure);
+        }
+
+        // Try to obtain the lock to make a stop request.
+        // Returns true if the lock is acquired and the __stop_requested_bit_ is
+        // set (with memory order acq_rel so that other threads see the request).
+        // Otherwise, sets __curval = __value_.load(memory_order::acquire) and
+        // returns false.
+        // Might fail spuriously, so must be called in a loop.
+        bool __try_lock_and_stop(value_type& __curval) _NOEXCEPT
+        {
+            return __do_try_lock(__curval, __stop_requested_bit_,
+                memory_order::acq_rel, memory_order::acquire);
+        }
+
+        bool __do_try_lock(value_type& __curval, value_type __newbits,
+                memory_order __success, memory_order __failure) _NOEXCEPT
+        {
+            if (__curval & __locked_bit_)
+            {
+                __yield();
+                __curval = __value_.load(__failure);
+                return false;
+            }
+            __newbits |= __locked_bit_;
+            return __value_.compare_exchange_weak(__curval, __curval | __newbits,
+                __success, __failure);
+        }
+    };
+
+    struct __libcpp_stop_state_ref
+    {
+        __libcpp_stop_state_ref() = default;
+
+        explicit
+        __libcpp_stop_state_ref(const stop_source&)
+            : __ptr_(new __libcpp_stop_state_t()) {}
+
+        __libcpp_stop_state_ref(const __libcpp_stop_state_ref& __other) _NOEXCEPT
+            : __ptr_(__other.__ptr_)
+        {
+            if (__ptr_)
+                __ptr_->__add_owner();
+        }
+
+        __libcpp_stop_state_ref(__libcpp_stop_state_ref&& __other) _NOEXCEPT
+            : __ptr_(__other.__ptr_)
+        {
+            __other.__ptr_ = nullptr;
+        }
+
+        __libcpp_stop_state_ref&
+        operator=(const __libcpp_stop_state_ref& __other) _NOEXCEPT
+        {
+            if (auto __ptr = __other.__ptr_; __ptr != __ptr_)
+            {
+                if (__ptr)
+                    __ptr->__add_owner();
+                if (__ptr_)
+                    __ptr_->__release_ownership();
+                __ptr_ = __ptr;
+            }
+            return *this;
+        }
+
+        __libcpp_stop_state_ref&
+        operator=(__libcpp_stop_state_ref&& __other) _NOEXCEPT
+        {
+            __libcpp_stop_state_ref(std::move(__other)).swap(*this);
+            return *this;
+        }
+
+        ~__libcpp_stop_state_ref()
+        {
+            if (__ptr_)
+                __ptr_->__release_ownership();
+        }
+
+        void swap(__libcpp_stop_state_ref& __other) _NOEXCEPT {std::swap(__ptr_, __other.__ptr_);}
+
+        explicit operator bool() const _NOEXCEPT {return __ptr_ != nullptr;}
+
+        __libcpp_stop_state_t* operator->() const _NOEXCEPT {return __ptr_;}
+
+#if __cpp_impl_three_way_comparison >= 201907L
+        friend bool
+        operator==(const __libcpp_stop_state_ref&, const __libcpp_stop_state_ref&) = default;
+#else
+        friend bool
+        operator==(const __libcpp_stop_state_ref& __lhs, const __libcpp_stop_state_ref& __rhs)
+        _NOEXCEPT
+        {return __lhs.__ptr_ == __rhs.__ptr_;}
+
+        friend bool
+        operator!=(const __libcpp_stop_state_ref& __lhs, const __libcpp_stop_state_ref& __rhs)
+        _NOEXCEPT
+        {return __lhs.__ptr_ != __rhs.__ptr_;}
+#endif
+
+    private:
+        __libcpp_stop_state_t* __ptr_ = nullptr;
+    };
+
+    __libcpp_stop_state_ref __state_;
+
+    explicit stop_token(const __libcpp_stop_state_ref& __state) _NOEXCEPT
+        : __state_{__state} {}
+};
+
+/// A type that allows a stop request to be made.
+class _LIBCPP_TYPE_VIS stop_source
+{
+public:
+    _LIBCPP_INLINE_VISIBILITY
+    stop_source() : __state_(*this) {}
+
+    _LIBCPP_INLINE_VISIBILITY
+    explicit stop_source(std::nostopstate_t) _NOEXCEPT {}
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_source(const stop_source& __other) _NOEXCEPT
+        : __state_(__other.__state_)
+    {
+        if (__state_)
+            __state_->__add_ssrc();
+    }
+
+    stop_source(stop_source&&) _NOEXCEPT = default;
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_source&
+    operator=(const stop_source& __other) _NOEXCEPT
+    {
+        if (__state_ != __other.__state_)
+        {
+            stop_source __sink(std::move(*this));
+            __state_ = __other.__state_;
+            if (__state_)
+            __state_->__add_ssrc();
+        }
+        return *this;
+    }
+
+    stop_source&
+    operator=(stop_source&&) _NOEXCEPT = default;
+
+    _LIBCPP_INLINE_VISIBILITY
+    ~stop_source()
+    {
+        if (__state_)
+            __state_->__sub_ssrc();
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool stop_possible() const _NOEXCEPT {return static_cast<bool>(__state_);}
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool stop_requested() const _NOEXCEPT
+    {
+        return static_cast<bool>(__state_) && __state_->__stop_requested();
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool request_stop() const _NOEXCEPT
+    {
+        if (stop_possible())
+        return __state_->__request_stop();
+        return false;
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_token get_token() const _NOEXCEPT {return stop_token{__state_};}
+
+    _LIBCPP_INLINE_VISIBILITY
+    void swap(stop_source& __other) _NOEXCEPT {__state_.swap(__other.__state_);}
+
+    _LIBCPP_INLINE_VISIBILITY
+    friend bool operator==(const stop_source& __a, const stop_source& __b) _NOEXCEPT
+    {
+        return __a.__state_ == __b.__state_;
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    friend void swap(stop_source& __lhs, stop_source& __rhs) _NOEXCEPT {__lhs.swap(__rhs);}
+
+private:
+    stop_token::__libcpp_stop_state_ref __state_;
+};
+
+/// A wrapper for callbacks to be run when a stop request is made.
+template<typename _Fp>
+class _LIBCPP_TYPE_VIS stop_callback
+{
+    static_assert(is_nothrow_destructible_v<_Fp>);
+    static_assert(is_invocable_v<_Fp>);
+
+public:
+    using callback_type = _Fp;
+
+    template<typename _Cb,
+            enable_if_t<is_constructible_v<_Fp, _Cb>, int> = 0>
+    explicit
+    _LIBCPP_INLINE_VISIBILITY
+    stop_callback(const stop_token& __token, _Cb&& __cb)
+        _NOEXCEPT(is_nothrow_constructible_v<_Fp, _Cb>)
+        : __cb_(std::forward<_Cb>(__cb))
+    {
+        if (auto __state = __token.__state_)
+            if (__state->__register_callback(&__cb_))
+                __state_.swap(__state);
+    }
+
+    template<typename _Cb,
+            enable_if_t<is_constructible_v<_Fp, _Cb>, int> = 0>
+    explicit
+    _LIBCPP_INLINE_VISIBILITY
+    stop_callback(stop_token&& __token, _Cb&& __cb)
+        _NOEXCEPT(is_nothrow_constructible_v<_Fp, _Cb>)
+        : __cb_(std::forward<_Cb>(__cb))
+    {
+        if (auto& __state = __token.__state_)
+            if (__state->__register_callback(&__cb_))
+                __state_.swap(__state);
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    ~stop_callback()
+    {
+        if (__state_)
+            __state_->__remove_callback(&__cb_);
+    }
+
+    stop_callback(const stop_callback&) = delete;
+    stop_callback& operator=(const stop_callback&) = delete;
+    stop_callback(stop_callback&&) = delete;
+    stop_callback& operator=(stop_callback&&) = delete;
+
+private:
+    struct __libcpp_cb_impl : stop_token::__libcpp_stop_cb
+    {
+        template<typename _Cb>
+        explicit __libcpp_cb_impl(_Cb&& __cb)
+            : __libcpp_stop_cb(&__execute), __cb_(std::forward<_Cb>(__cb)) {}
+
+        _Fp __cb_;
+
+        static void __execute(__libcpp_stop_cb* __that) _NOEXCEPT
+        {
+            _Fp& __cb = static_cast<__libcpp_cb_impl*>(__that)->__cb_;
+            std::forward<_Fp>(__cb)();
+        }
+    };
+
+    __libcpp_cb_impl __cb_;
+    stop_token::__libcpp_stop_state_ref __state_;
+};
+
+template<typename _Fp>
+stop_callback(stop_token, _Fp) -> stop_callback<_Fp>;
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif // __cplusplus > 201703L
+#endif // _LIBCPP_STOP_TOKEN

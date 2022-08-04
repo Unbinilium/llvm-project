@@ -233,6 +233,10 @@ def ext_imaginary_constant : Extension<
 def ext_integer_complex : Extension<
   "complex integer types are a GNU extension">, InGroup<GNUComplexInteger>;
 
+def warn_deprecated_underscore_id_decl : Warning<
+  "declaring aliases, namespaces and types called '_' is deprecated">;
+
+
 def err_invalid_saturation_spec : Error<"'_Sat' specifier is only valid on "
   "'_Fract' or '_Accum', not '%0'">;
 def err_invalid_sign_spec : Error<"'%0' cannot be signed or unsigned">;
@@ -5457,7 +5461,9 @@ def note_parameter_type : Note<
 def err_template_param_pack_default_arg : Error<
   "template parameter pack cannot have a default argument">;
 def err_template_param_pack_must_be_last_template_parameter : Error<
-  "template parameter pack must be the last template parameter">;
+  "non-trailing template parameter packs are a C++23 extension">;
+def err_template_param_multiple_packs : Error<
+  "template parameter list cannot contain multiple parameter packs">;
 
 def err_template_parameter_pack_non_pack : Error<
   "%select{template type|non-type template|template template}0 parameter"
@@ -6496,6 +6502,16 @@ def warn_atomic_member_access : Warning<
   InGroup<DiagGroup<"atomic-access">>, DefaultError;
 
 // Expressions.
+def warn_using_underscore_confusing : Warning<
+  "Refering to a variable named '_' while anonymous variables are in scope">;
+def note_reference_underscore : Note<
+  "'_' refers to the variable declared here">;
+def warn_anonymous_variable_has_no_side_effect : Warning<
+  "Anonymous variable has no side effect">;
+
+def select_unary_expr_or_type_trait_kind : TextSubstitution<
+  "%select{sizeof|alignof|vec_step|__builtin_omp_required_simd_align|"
+  "__alignof}0">;
 def ext_sizeof_alignof_function_type : Extension<
   "invalid application of '%0' to a function type">, InGroup<PointerArith>;
 def ext_sizeof_alignof_void_type : Extension<
@@ -11534,6 +11550,9 @@ def warn_noderef_to_dereferenceable_pointer : Warning<
 def err_builtin_launder_invalid_arg : Error<
   "%select{non-pointer|function pointer|void pointer}0 argument to "
   "'__builtin_launder' is not allowed">;
+
+def err_builtin_start_lifetime_as_invalid_arg : Error<
+  "'__builtin__start_lifetime_as': %0 is not an implicit lifetime type">;
 
 def err_builtin_invalid_arg_type: Error <
   "%ordinal0 argument must be a "

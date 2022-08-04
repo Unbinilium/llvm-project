@@ -2727,6 +2727,7 @@ Sema::ActOnIdExpression(Scope *S, CXXScopeSpec &SS,
     return BuildTemplateIdExpr(SS, TemplateKWLoc, R, ADL, TemplateArgs);
   }
 
+  CheckUseOfPlaceholderVariables(R.getLookupNameInfo(), R.getAsSingle<NamedDecl>());
   return BuildDeclarationNameExpr(SS, R, ADL);
 }
 
@@ -3254,6 +3255,27 @@ ExprResult Sema::BuildDeclarationNameExpr(const CXXScopeSpec &SS,
 static void diagnoseUncapturableValueReferenceOrBinding(Sema &S,
                                                         SourceLocation loc,
                                                         ValueDecl *var);
+
+
+void Sema::CheckUseOfPlaceholderVariables(const DeclarationNameInfo &NameInfo, NamedDecl *D) {
+  if(!D)
+    return;
+  const IdentifierInfo* I = D->getDeclName().getAsIdentifierInfo();
+  if (isa<VarDecl>(D) && I && I->isPlaceholder()) {
+    LookupResult R(*this, D->getDeclName(), D->getLocation(),
+                 Sema::LookupOrdinaryName, Sema::ForVisibleRedeclaration);
+    R.setIgnoreAnonymousVariables(false);
+    LookupName(R, getCurScope());;
+    for(NamedDecl* Decl: R) {
+      if(!isa<BindingDecl>(Decl) && isDeclInScope(Decl, CurContext, getCurScope())
+      && Decl->isAnonymous()) {
+        Diag(NameInfo.getLoc(), diag::warn_using_underscore_confusing);
+        Diag(D->getLocation(), diag::note_reference_underscore) << D;
+        break;
+      }
+    }
+  }
+}
 
 /// Complete semantic analysis for a reference to the given declaration.
 ExprResult Sema::BuildDeclarationNameExpr(

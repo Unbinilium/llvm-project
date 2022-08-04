@@ -764,6 +764,7 @@ set(files
   stdint.h
   stdio.h
   stdlib.h
+  stop_token
   streambuf
   string
   string.h

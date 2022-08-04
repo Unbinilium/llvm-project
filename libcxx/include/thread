@@ -97,6 +97,8 @@ void sleep_for(const chrono::duration<Rep, Period>& rel_time);
 #include <tuple>
 #include <type_traits>
 #include <version>
+#include <__type_traits/is_base_of.h>
+#include <string_view>
 
 #ifndef _LIBCPP_REMOVE_TRANSITIVE_INCLUDES
 #  include <chrono>
@@ -105,6 +107,10 @@ void sleep_for(const chrono::duration<Rep, Period>& rel_time);
 
 // standard-mandated includes
 #include <compare>
+
+#if __cplusplus > 201703L
+#  include <stop_token>
+#endif
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #  pragma GCC system_header
@@ -221,6 +227,62 @@ basic_ostream<_CharT, _Traits>&
 operator<<(basic_ostream<_CharT, _Traits>& __os, __thread_id __id)
 {return __os << __id.__id_;}
 
+#  if __cplusplus > 202100L
+
+template <typename...>
+constexpr bool __has_duplicated_thread_attribute = false;
+template <typename K, typename First, typename... T>
+constexpr bool __has_duplicated_thread_attribute<K, First, T...>
+     = is_same_v<First, K> || __has_duplicated_thread_attribute<K, T...>;
+
+template <typename K>
+K* __extract_thread_attribute()  { return nullptr; }
+template <typename K, typename First, typename... T>
+constexpr const K* __extract_thread_attribute(const First & first, const T&... trailing)  {
+    if constexpr(is_same_v<First, K>) {
+        static_assert(!__has_duplicated_thread_attribute<K, T...>, "Found duplicated thread attribute");
+        return &first;
+    }
+    return __extract_thread_attribute<K>(trailing...);
+}
+
+struct _LIBCPP_TYPE_VIS thread_attribute {};
+struct _LIBCPP_TYPE_VIS thread_name : thread_attribute {
+
+#ifdef _LIBCPP_HAS_THREAD_API_WIN32
+    static constexpr std::size_t __max_len = 64;
+#else
+    static constexpr std::size_t __max_len = 15;
+#endif
+    constexpr thread_name(std::string_view str) noexcept {
+      __name[str.copy(__name, __max_len)] = 0;
+    }
+    constexpr thread_name(std::u8string_view str) noexcept {
+      std::size_t __i = 0;
+      for(; __i < std::min(__max_len, str.size());  __i++)
+        __name[__i] = (char)str[__i];
+      __name[__i] = 0;
+    }
+private:
+    friend class _LIBCPP_TYPE_VIS thread;
+    friend class _LIBCPP_TYPE_VIS jthread;
+    __libcpp_threadname_char_t __name[__max_len + 1];
+};
+
+struct _LIBCPP_TYPE_VIS thread_stack_size : thread_attribute {
+    constexpr thread_stack_size(std::size_t size) noexcept
+    : __size(size) {
+
+    }
+    std::size_t __size;
+};
+
+template <typename T>
+concept __thread_attribute = is_base_of_v<thread_attribute, T>;
+
+#endif
+
+
 class _LIBCPP_TYPE_VIS thread
 {
     __libcpp_thread_t __t_;
@@ -237,7 +299,14 @@ public:
     template <class _Fp, class ..._Args,
               class = __enable_if_t<!is_same<__uncvref_t<_Fp>, thread>::value> >
         _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
-        explicit thread(_Fp&& __f, _Args&&... __args);
+    explicit thread(_Fp&& __f, _Args&&... __args);
+
+#  if __cplusplus > 202100L
+    template <class  _Fp, __thread_attribute... Attrs>
+    _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit thread(_Fp && __f, Attrs&&... attrs);
+#   endif
+
 #else  // _LIBCPP_CXX03_LANG
     template <class _Fp>
     _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
@@ -315,6 +384,35 @@ thread::thread(_Fp&& __f, _Args&&... __args)
         __throw_system_error(__ec, "thread constructor failed");
 }
 
+#  if __cplusplus > 202100L
+template <class _Fp, __thread_attribute... Attrs>
+thread::thread(_Fp && __f, Attrs&&... __attrs)
+{
+    const char* __thread_name = nullptr;
+    std::size_t __thread_stack_size = 0;
+
+    if (auto opt = __extract_thread_attribute<thread_name>(__attrs...); opt) {
+        __thread_name = opt->__name;
+    }
+    if (auto opt = __extract_thread_attribute<thread_stack_size>(__attrs...); opt) {
+        __thread_stack_size = opt->__size;
+    }
+
+    typedef unique_ptr<__thread_struct> _TSPtr;
+    _TSPtr __tsp(new __thread_struct);
+    typedef tuple<_TSPtr, typename decay<_Fp>::type> _Gp;
+    unique_ptr<_Gp> __p(
+            new _Gp(_VSTD::move(__tsp),
+                    _VSTD::forward<_Fp>(__f)));
+    int __ec = __libcpp_thread_create(&__t_, &__thread_proxy<_Gp>, __p.get(),
+                                       __thread_stack_size, __thread_name);
+    if (__ec == 0)
+        __p.release();
+    else
+        __throw_system_error(__ec, "thread constructor failed");
+}
+#endif // __cplusplus > 202100L
+
 #else  // _LIBCPP_CXX03_LANG
 
 template <class _Fp>
@@ -351,6 +449,108 @@ thread::thread(_Fp __f)
 }
 
 #endif // _LIBCPP_CXX03_LANG
+
+
+#ifdef __cpp_lib_jthread
+
+class _LIBCPP_TYPE_VIS jthread
+{
+    stop_source __stop_source_;
+    thread __thr_;
+
+    jthread(const jthread&);
+    jthread& operator=(const jthread&);
+
+    template<class _Fp, class... _Args>
+    thread
+    __create(stop_source& __ssrc, _Fp&& __f, _Args&&... __args)
+    {
+        // TODO: extract thread attributes from __args
+        //   [ ] _Fp
+        //   [x] _Fp, _thr_Attrs | works
+        //   [ ] _Fp, _Fp_Args
+        //   [x] _Fp, stop_token | not works, std::thread may need change
+        //   [x] _Fp, stop_token, _Fp_Args | not works, std::thread may need change
+        //   [ ] _Fp, stop_token, _Fp_Args, _thr_Attrs
+	    if constexpr(is_invocable_v<decay_t<_Fp>, stop_token>)
+	        return thread(_VSTD::forward<_Fp>(__f), __ssrc.get_token(),
+			              _VSTD::forward<_Args>(__args)...);
+        else
+            return thread(_VSTD::forward<_Fp>(__f),
+                          _VSTD::forward<_Args>(__args)...);
+    }
+
+public:
+    typedef __thread_id id;
+    typedef __libcpp_thread_t native_handle_type;
+
+    _LIBCPP_INLINE_VISIBILITY
+    jthread() _NOEXCEPT : __stop_source_(nostopstate), __thr_(thread{}) {}
+#  ifndef _LIBCPP_CXX03_LANG
+    template <class _Fp, class ..._Args,
+              class = __enable_if_t<!is_same<__uncvref_t<_Fp>, jthread>::value> >
+        _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp&& __f, _Args&&... __args) : __stop_source_(nostopstate), __thr_(
+        __create(__stop_source_, _VSTD::forward<_Fp>(__f),
+            _VSTD::forward<_Args>(__args)...)
+        ) {}
+
+#    if __cplusplus > 202100L
+    template <class  _Fp, __thread_attribute... Attrs>
+    _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp && __f, Attrs&&... attrs) : __stop_source_(nostopstate), __thr_(
+        __create(__stop_source_, _VSTD::forward<_Fp>(__f),
+            _VSTD::forward<Attrs>(attrs)...)
+        ) {};
+#    endif
+
+#  else  // _LIBCPP_CXX03_LANG
+    template <class _Fp>
+    _LIBCPP_METHOD_TEMPLATE_IMPLICIT_INSTANTIATION_VIS
+    explicit jthread(_Fp __f) : __stop_source_(nostopstate), __thr_(__create(__stop_source_, _VSTD::forward<_Fp>(__f))) {};
+#  endif
+    ~jthread();
+
+    _LIBCPP_INLINE_VISIBILITY
+    jthread(jthread&& __t) _NOEXCEPT : __stop_source_(_VSTD::move(__t.__stop_source_)), __thr_(_VSTD::move(__t.__thr_)) {
+        __t.__thr_ = thread{};
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    jthread& operator=(jthread&& __t) _NOEXCEPT {
+        jthread(_VSTD::move(__t)).swap(*this);
+        return *this;
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    void swap(jthread& __t) _NOEXCEPT {
+        _VSTD::swap(__stop_source_, __t.__stop_source_);
+        _VSTD::swap(__thr_, __t.__thr_);
+    }
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool joinable() const _NOEXCEPT {return __thr_.joinable();}
+    void join();
+    void detach();
+    _LIBCPP_INLINE_VISIBILITY
+    id get_id() const _NOEXCEPT {return __thr_.get_id();}
+    _LIBCPP_INLINE_VISIBILITY
+    native_handle_type native_handle() _NOEXCEPT {return __thr_.native_handle();}
+
+    static unsigned hardware_concurrency() _NOEXCEPT;
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_source get_stop_source() _NOEXCEPT {return __stop_source_;}
+
+    _LIBCPP_INLINE_VISIBILITY
+    stop_token get_stop_token() const _NOEXCEPT {return __stop_source_.get_token();}
+
+    _LIBCPP_INLINE_VISIBILITY
+    bool request_stop() _NOEXCEPT {return __stop_source_.request_stop();}
+};
+
+#endif
+
 
 inline _LIBCPP_INLINE_VISIBILITY
 void swap(thread& __x, thread& __y) _NOEXCEPT {__x.swap(__y);}
